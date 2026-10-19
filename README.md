@@ -284,7 +284,7 @@ There is no hosted CI. Before each commit, `./scripts/ci-local.sh` runs these ch
 
 <div align="center">
 
-**Need something built, secured or kept online?** → [samurai@n3xus.dev](mailto:samurai@n3xus.dev) · [n3xus.dev](https://n3xus.dev)
+**Need something built, secured or kept online?** → [contato@n3xus.dev](mailto:contato@n3xus.dev) · [n3xus.dev](https://n3xus.dev)
 
 MIT © Thiago "Samurai" Rangel · [N3XUS](https://n3xus.dev)
 
