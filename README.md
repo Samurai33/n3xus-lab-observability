@@ -1,12 +1,79 @@
-# n3xus-lab-observability
+<div align="center">
 
-Prometheus and Alertmanager monitoring for a self-hosted Proxmox lab: UPS, server hardware, VMs and containers,
-backups, a MikroTik router and the internet uplink. Alerts go to Telegram and e-mail, with a dead man's switch.
+<img src="assets/n3xus-icon.png" alt="N3XUS" width="96">
 
-This is the sanitized version of the stack that has run 24/7 in my lab since October 2026. It covers two Proxmox
-nodes, around 120 containers, a MikroTik RB5009, a NUT-managed UPS and about 50 public sites behind Cloudflare
-Tunnel. Every rule has been tuned on real incidents, and the comments in the YAML say why each threshold is
-what it is.
+# N3XUS Lab Observability
+
+### Production-grade monitoring for a self-hosted Proxmox lab
+
+Prometheus and Alertmanager rules, exporters and collectors for UPS, server hardware, backups, containers,
+a MikroTik router and the internet uplink. Alerts go to Telegram and e-mail, with a dead man's switch.
+
+[![Website](https://img.shields.io/badge/n3xus.dev-0B1220?style=for-the-badge&logo=googlechrome&logoColor=14B8A6)](https://n3xus.dev)
+[![Status](https://img.shields.io/badge/status.n3xus.dev-live-2EA043?style=for-the-badge&logo=statuspage&logoColor=white)](https://status.n3xus.dev)
+[![License](https://img.shields.io/badge/License-MIT-F59E0B?style=for-the-badge)](LICENSE)
+
+[![Prometheus](https://img.shields.io/badge/Prometheus-v3.13-E6522C?style=flat-square&logo=prometheus&logoColor=white)](prometheus/prometheus.yml)
+[![Alertmanager](https://img.shields.io/badge/Alertmanager-v0.34-E6522C?style=flat-square&logo=prometheus&logoColor=white)](alertmanager/alertmanager.yml)
+[![Proxmox VE](https://img.shields.io/badge/Proxmox%20VE-8.3%2B-E57000?style=flat-square&logo=proxmox&logoColor=white)](proxmox/notifications)
+[![MikroTik](https://img.shields.io/badge/MikroTik-MKTXP%20read--only-293239?style=flat-square&logo=mikrotik&logoColor=white)](mktxp)
+[![Docker Compose](https://img.shields.io/badge/quickstart-Docker%20Compose-2496ED?style=flat-square&logo=docker&logoColor=white)](docker-compose.yml)
+[![Checks](https://img.shields.io/badge/checks-local%20Docker%20%C2%B7%20gitleaks-111827?style=flat-square&logo=docker&logoColor=white)](scripts/ci-local.sh)
+[![Security](https://img.shields.io/badge/security-policy-111827?style=flat-square)](SECURITY.md)
+
+</div>
+
+---
+
+## Table of Contents
+
+- [Overview](#overview)
+- [Why this exists](#why-this-exists)
+- [What it watches](#what-it-watches)
+- [Architecture](#architecture)
+- [Quickstart](#quickstart)
+- [Running it in an unprivileged LXC](#running-it-in-an-unprivileged-lxc)
+- [Repository structure](#repository-structure)
+- [Security model](#security-model)
+- [Lessons baked into the rules](#lessons-baked-into-the-rules)
+- [Checks](#checks)
+- [Current status](#current-status)
+
+---
+
+## Overview
+
+**N3XUS Lab Observability** is the sanitized, reusable version of the monitoring stack that has kept the N3XUS lab
+online 24/7 since October 2026. The lab has two Proxmox VE nodes, around 120 containers, a MikroTik RB5009,
+a NUT-managed UPS and about 50 public sites behind Cloudflare Tunnel. The same stack feeds the public
+[status.n3xus.dev](https://status.n3xus.dev).
+
+Every rule here was tuned on real incidents. The comments in the YAML explain why each threshold has the value
+it has, so you can adapt them to your own lab.
+
+It is built for:
+
+- homelabs and small production labs on Proxmox VE;
+- operators who want **alerts that mean something**, not dashboards nobody watches;
+- teams that need read-only, least-privilege monitoring they can audit.
+
+---
+
+## Why this exists
+
+Small-lab monitoring usually goes wrong in one of two ways:
+
+1. **Too little:** a dashboard and no alerts, so you find out from users that something broke.
+2. **Too noisy:** stock rule packs that alert on every swap page and every UPS warm-up, until everyone mutes the
+   channel.
+
+This repository aims for the middle path:
+
+```text
+few, explained rules  +  least-privilege collectors  +  routing that respects severity  +  a dead man's switch
+```
+
+---
 
 ## What it watches
 
@@ -23,6 +90,10 @@ what it is.
 | **Internet** | blackbox ICMP | Separates "ISP is down" from "modem/cable" and from "tunnel/origin" |
 | **Sites** | blackbox HTTP | Per-target severity. A 401/403/404 from the origin counts as up (the tunnel answered); 5xx/530 counts as down. |
 | **Proxmox notifications** | PVE webhook target | vzdump/updates/fencing/replication events go to the same Telegram chat, through Alertmanager or directly ([docs](proxmox/notifications)) |
+
+71 alert rules in 9 files. Run `promtool check rules prometheus/rules/*.yml` to list them.
+
+---
 
 ## Architecture
 
@@ -64,17 +135,21 @@ flowchart LR
   AM -- "Watchdog every 10 min" --> HB["External heartbeat<br/>(dead man's switch)"]
 ```
 
-Routing (in [`alertmanager/alertmanager.yml`](alertmanager/alertmanager.yml)):
+**Alert routing** ([`alertmanager/alertmanager.yml`](alertmanager/alertmanager.yml)):
 
-- **critical** goes to Telegram and e-mail. **warning** goes to Telegram only.
-- **energy="yes"** (UPS) goes to Telegram only, because NUT already sends its own e-mail.
-- **Proxmox** events are sent once each, never repeated. `info` events are silent.
-- **Watchdog** fires all the time and goes to an external heartbeat endpoint. If the heartbeats stop, that
-  endpoint alerts you, so a dead monitoring stack can't stay silent.
-- Inhibitions: a host that is down mutes everything else on that host. When the internet is down, site alerts
-  are muted.
+| Match | Goes to | Why |
+|---|---|---|
+| `severity="critical"` | Telegram + e-mail | Someone has to act now |
+| `severity="warning"` | Telegram | Look at it today |
+| `energy="yes"` (UPS) | Telegram only, repeated every 15 min | NUT already sends its own e-mail |
+| `alertname="Proxmox"` | Telegram, once per event; `info` events are silent | PVE events don't resolve, they just happen |
+| `alertname="Watchdog"` | External heartbeat | If the heartbeats stop, the endpoint alerts you: a dead monitoring stack can't stay silent |
 
-## Quickstart (Docker Compose)
+Inhibitions: a host that is down mutes every other alert on that host, and an internet outage mutes site alerts.
+
+---
+
+## Quickstart
 
 Requires Docker with Compose v2.
 
@@ -97,7 +172,10 @@ chmod 600 secrets/*
 docker compose up -d
 ```
 
-Prometheus is at <http://127.0.0.1:9090> and Alertmanager at <http://127.0.0.1:9093>.
+| Service | URL |
+|---|---|
+| Prometheus | <http://127.0.0.1:9090> |
+| Alertmanager | <http://127.0.0.1:9093> |
 
 ### On the hosts
 
@@ -116,9 +194,11 @@ systemctl daemon-reload && systemctl enable --now nut-textfile.timer
 Make the exporters listen only on the interface that faces the monitoring VLAN
 (e.g. `--web.listen-address=<host ip>:9100`). Then allow only the Prometheus host to reach them in the firewall.
 
-## Running it in an unprivileged LXC instead
+---
 
-That is how it runs in my lab: Debian packages for Prometheus, Alertmanager and blackbox, plus MKTXP and
+## Running it in an unprivileged LXC
+
+That is how it runs in the N3XUS lab: Debian packages for Prometheus, Alertmanager and blackbox, plus MKTXP and
 pve-exporter in Python venvs. The units are in [`systemd/`](systemd). Things that bite:
 
 - **ICMP in an unprivileged LXC.** `AmbientCapabilities=CAP_NET_RAW` does nothing there. Set
@@ -128,19 +208,40 @@ pve-exporter in Python venvs. The units are in [`systemd/`](systemd). Things tha
 - **IPMI** needs `/dev/ipmi0`, which is root-only. Use a sudoers rule limited to the FreeIPMI binaries plus
   `collector_cmd` in the ipmi_exporter config, not a root exporter.
 
-## Repository layout
+---
 
-```
-prometheus/          prometheus.yml + rules/ (meta, ups, hardware, host, proxmox, docker, sites, internet, mikrotik)
-alertmanager/        alertmanager.yml + templates/lab.tmpl (Telegram HTML + e-mail)
-blackbox/            ICMP and "published site" HTTP modules
-mktxp/               MKTXP config + RouterOS read-only setup and rollback
-pve-exporter/        pve.yml example (PVEAuditor token)
-collectors/          textfile collectors: nut, vzdump, lvm-thin, docker (+ systemd units)
-proxmox/notifications/  PVE webhook bodies: via Alertmanager or straight to Telegram
-systemd/             units for running the exporters outside Docker (hardened)
-scripts/ci-local.sh  promtool + amtool + gitleaks + syntax checks, all in Docker
-```
+## Repository structure
+
+| Path | What it is |
+|---|---|
+| `prometheus/prometheus.yml` | Scrape jobs: node, ipmi, vms, pve, sites, mikrotik, internet |
+| `prometheus/rules/` | Alert rules: meta, ups, hardware, host, proxmox, docker, sites, internet, mikrotik |
+| `alertmanager/` | Routing, inhibitions and `templates/lab.tmpl` (Telegram HTML + e-mail) |
+| `blackbox/blackbox.yml` | ICMP module and the "published site" HTTP module |
+| `mktxp/` | MKTXP config, plus RouterOS read-only setup and rollback |
+| `pve-exporter/pve.yml.example` | Example config for a PVEAuditor token |
+| `collectors/` | Textfile collectors (`nut`, `vzdump`, `lvm-thin`, `docker`) with systemd units |
+| `proxmox/notifications/` | PVE webhook bodies: through Alertmanager or straight to Telegram |
+| `systemd/` | Hardened units for running the exporters outside Docker |
+| `secrets/` | Ignored by git. `secrets/README.md` lists the files to create. |
+| `scripts/ci-local.sh` | promtool, amtool, gitleaks and syntax checks, all in Docker |
+| `docker-compose.yml` | Quickstart with pinned images, published on loopback only |
+
+---
+
+## Security model
+
+- **Read-only by design.** Proxmox uses a `PVEAuditor` token. MikroTik uses a `read,api` user locked to one source
+  address, over API-SSL only, with the certificate pinned to your own CA.
+- **No secrets in config.** Every token and password is read from a `*_file` path under `secrets/`, which git
+  ignores. gitleaks scans the history before every push.
+- **Loopback by default.** Put an authenticating proxy or a VPN in front of Prometheus and Alertmanager. Never
+  expose them directly.
+- **Isolated monitoring VLAN.** It reaches only the exporter ports it scrapes, and only it can reach them.
+
+Found a problem? See [SECURITY.md](SECURITY.md) and use private vulnerability reporting, not a public issue.
+
+---
 
 ## Lessons baked into the rules
 
@@ -156,12 +257,35 @@ scripts/ci-local.sh  promtool + amtool + gitleaks + syntax checks, all in Docker
   flag plus a brief loss of communication (for example, a router reboot) makes upsmon assume the UPS is dead and
   start a forced shutdown.
 
+---
+
 ## Checks
 
 There is no hosted CI. Before each commit, `./scripts/ci-local.sh` runs these checks in Docker:
-`promtool check config` (which also checks the rules), `amtool check-config`, gitleaks over the git history and
-the working tree, and a syntax check of the collectors.
 
-## License
+| Check | Tool |
+|---|---|
+| Prometheus config and every rule | `promtool check config` |
+| Alertmanager routing and templates | `amtool check-config` |
+| Secrets in the git history and the working tree | `gitleaks git` + `gitleaks dir` |
+| Collector syntax | `python -m py_compile`, `sh -n` |
 
-[MIT](LICENSE)
+---
+
+## Current status
+
+| | |
+|---|---|
+| **In production** | Since October 2026, on the N3XUS lab (two Proxmox VE nodes, MikroTik RB5009, NUT UPS) |
+| **Validated** | promtool / amtool on every rule; collectors run against real hosts |
+| **Not included** | Grafana dashboards. The lab's own panel is the status page linked above. |
+
+---
+
+<div align="center">
+
+**Need something built, secured or kept online?** → [samurai@n3xus.dev](mailto:samurai@n3xus.dev) · [n3xus.dev](https://n3xus.dev)
+
+MIT © Thiago "Samurai" Rangel · [N3XUS](https://n3xus.dev)
+
+</div>
