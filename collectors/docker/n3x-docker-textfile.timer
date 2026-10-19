@@ -1,0 +1,9 @@
+[Unit]
+Description=Docker/fail2ban metrics every 60 s
+
+[Timer]
+OnBootSec=60s
+OnUnitActiveSec=60s
+
+[Install]
+WantedBy=timers.target

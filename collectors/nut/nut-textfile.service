@@ -1,0 +1,8 @@
+[Unit]
+Description=UPS (NUT) metrics for the node_exporter textfile collector
+After=nut-server.service
+
+[Service]
+Type=oneshot
+# Environment=UPS=myups@localhost
+ExecStart=/usr/local/sbin/nut-textfile

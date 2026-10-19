@@ -1,0 +1,7 @@
+[Unit]
+Description=Docker containers and fail2ban jails for the node_exporter textfile collector
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/n3x-docker-textfile
+Nice=10

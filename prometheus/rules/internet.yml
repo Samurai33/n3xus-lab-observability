@@ -1,0 +1,40 @@
+# ICMP probes (job internet, one ping every 15 s).
+# How to read them:
+#   external bad + modem good -> ISP problem
+#   modem bad                 -> modem or cable between router and modem
+#   pings good + sites down   -> tunnel/CDN/origin, not the uplink
+groups:
+  - name: internet
+    rules:
+      - alert: InternetNoPing
+        expr: max(probe_success{job="internet",role="external"}) == 0
+        for: 1m
+        labels: { severity: critical }
+        annotations: { summary: "Internet down: no external target answers ping for 1 min" }
+
+      - alert: InternetPacketLoss
+        expr: 100 * (1 - avg by(target, instance) (avg_over_time(probe_success{job="internet",role="external"}[5m]))) > 10
+        for: 5m
+        labels: { severity: warning }
+        annotations: { summary: "Packet loss to {{ $labels.instance }}: {{ $value | printf \"%.0f\" }}% over 5 min (ISP)" }
+
+      - alert: InternetHighLatency
+        expr: 1000 * quantile_over_time(0.5, (probe_icmp_duration_seconds{job="internet",role="external",phase="rtt"} > 0)[5m:]) > 50
+        for: 5m
+        labels: { severity: warning }
+        annotations: { summary: "Median RTT to {{ $labels.instance }} at {{ $value | printf \"%.0f\" }} ms" }
+
+      # Modem rules arm only after the modem answered at least once in the last 24 h ("offset 5m" keeps
+      # the window from catching the period before a firewall rule allowed the ping). Avoids false alarms
+      # on modems that never answer ICMP from the monitoring VLAN.
+      - alert: ModemNotResponding
+        expr: avg_over_time(probe_success{job="internet",role="modem"}[2m]) < 0.5 and max_over_time(probe_success{job="internet",role="modem"}[24h] offset 5m) == 1
+        for: 1m
+        labels: { severity: critical }
+        annotations: { summary: "ISP modem ({{ $labels.instance }}) not answering ping: modem hung or cable" }
+
+      - alert: ModemLossOrLatency
+        expr: (100 * (1 - avg_over_time(probe_success{job="internet",role="modem"}[5m])) > 5 or 1000 * quantile_over_time(0.5, (probe_icmp_duration_seconds{job="internet",role="modem",phase="rtt"} > 0)[5m:]) > 20) and on(instance) max_over_time(probe_success{job="internet",role="modem"}[24h] offset 5m) == 1
+        for: 5m
+        labels: { severity: warning }
+        annotations: { summary: "ISP modem unstable (loss > 5% or RTT > 20 ms): link between router and modem" }

@@ -1,0 +1,88 @@
+# Server hardware: ipmi_exporter, node_exporter hwmon, smartmon/nvme/zfs textfile collectors
+# (prometheus-node-exporter-collectors on Debian). Rules tolerate missing data: no collector, no alert.
+groups:
+  - name: hardware
+    rules:
+      # ipmi_*_state: 0 = nominal, 1 = warning, 2 = critical.
+      # "Entity Presence" sensors report critical for empty slots, so they are excluded.
+      # label_replace keeps the metric name as a label (otherwise it is dropped by the comparison).
+      - alert: IpmiSensorCritical
+        expr: 'label_replace({__name__=~"ipmi_.+_state", __name__!~"ipmi_chassis_.+", type!="Entity Presence"}, "metric", "$1", "__name__", "(.+)") == 2'
+        for: 2m
+        labels: { severity: critical }
+        annotations: { summary: "{{ $labels.instance }}: BMC sensor {{ $labels.name }} ({{ $labels.type }}) CRITICAL" }
+
+      - alert: IpmiSensorWarning
+        expr: 'label_replace({__name__=~"ipmi_.+_state", __name__!~"ipmi_chassis_.+", type!="Entity Presence"}, "metric", "$1", "__name__", "(.+)") == 1'
+        for: 5m
+        labels: { severity: warning }
+        annotations: { summary: "{{ $labels.instance }}: BMC sensor {{ $labels.name }} ({{ $labels.type }}) in warning" }
+
+      # Gotcha: ipmi_chassis_*_fault_state is 1 = OK, 0 = fault (inverted vs the sensors above).
+      - alert: ChassisFault
+        expr: label_replace({__name__=~"ipmi_chassis_(cooling|drive)_fault_state"}, "metric", "$1", "__name__", "ipmi_chassis_(.+)_state") == 0
+        for: 2m
+        labels: { severity: critical }
+        annotations: { summary: "{{ $labels.instance }}: chassis reports {{ $labels.metric }}" }
+
+      - alert: SelNewEvent
+        expr: increase(ipmi_sel_logs_count[10m]) > 0
+        labels: { severity: warning }
+        annotations: { summary: "{{ $labels.instance }}: new entry in the BMC System Event Log" }
+
+      - alert: InletTemperature
+        expr: node_ipmi_temperature_celsius{sensor="Inlet Temp"} > 35
+        for: 5m
+        labels: { severity: warning }
+        annotations: { summary: "{{ $labels.instance }}: inlet air at {{ $value }} °C" }
+
+      - alert: CpuTemperature
+        expr: node_hwmon_temp_celsius{chip=~"platform_coretemp_.*"} > 85
+        for: 5m
+        labels: { severity: critical }
+        annotations: { summary: "{{ $labels.instance }}: CPU {{ $labels.chip }} at {{ $value }} °C" }
+
+      - alert: NvmeTemperature
+        expr: node_hwmon_temp_celsius{chip=~"nvme_.*", sensor="temp1"} > 70
+        for: 10m
+        labels: { severity: warning }
+        annotations: { summary: "{{ $labels.instance }}: NVMe at {{ $value }} °C" }
+
+      - alert: DiskSmartFailed
+        expr: smartmon_device_smart_healthy == 0
+        labels: { severity: critical }
+        annotations: { summary: "{{ $labels.instance }}: SMART reports failure on {{ $labels.disk }}" }
+
+      - alert: DiskSectorsReallocated
+        expr: increase(smartmon_reallocated_sector_ct_raw_value[1d]) > 0 or increase(smartmon_current_pending_sector_raw_value[1d]) > 0
+        labels: { severity: warning }
+        annotations: { summary: "{{ $labels.instance }}: reallocated/pending sectors growing on {{ $labels.disk }}" }
+
+      - alert: NvmeWearHigh
+        expr: nvme_percentage_used_ratio > 0.8
+        for: 1h
+        labels: { severity: warning }
+        annotations: { summary: "{{ $labels.instance }}: NVMe {{ $labels.device }} used {{ $value | humanizePercentage }} of its rated life" }
+
+      - alert: NvmeSpareLow
+        expr: nvme_available_spare_ratio < 0.2
+        for: 1h
+        labels: { severity: critical }
+        annotations: { summary: "{{ $labels.instance }}: NVMe {{ $labels.device }} spare at {{ $value | humanizePercentage }}: replace the drive" }
+
+      - alert: NvmeMediaErrors
+        expr: increase(nvme_media_errors_total[1h]) > 0
+        labels: { severity: critical }
+        annotations: { summary: "{{ $labels.instance }}: NVMe {{ $labels.device }} logged a media error" }
+
+      - alert: ZpoolNotOnline
+        expr: zfs_zpool{health!="ONLINE"} == 1
+        for: 5m
+        labels: { severity: critical }
+        annotations: { summary: "{{ $labels.instance }}: ZFS pool {{ $labels.zpool_name }} is {{ $labels.health }}" }
+
+      - alert: ZpoolFragmented
+        expr: zfs_zpool_fragmentation > 70
+        for: 6h
+        labels: { severity: warning }
+        annotations: { summary: "{{ $labels.instance }}: ZFS pool {{ $labels.zpool_name }} at {{ $value }}% fragmentation" }

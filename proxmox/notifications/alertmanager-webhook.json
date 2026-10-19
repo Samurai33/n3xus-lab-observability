@@ -1,0 +1,1 @@
+[{"labels": {"alertname": "Proxmox", "host": "{{#if fields.hostname}}{{ fields.hostname }}{{else}}pve{{/if}}", "pve_type": "{{ fields.type }}", "pve_severity": "{{ severity }}", "event": "{{ escape title }}"}, "annotations": {"title": "{{ escape title }}", "message": "{{ escape message }}"}}]

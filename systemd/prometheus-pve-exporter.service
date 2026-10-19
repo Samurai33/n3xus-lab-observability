@@ -1,0 +1,17 @@
+[Unit]
+Description=Prometheus exporter for Proxmox VE (venv in /opt/pve-exporter)
+Documentation=https://github.com/prometheus-community/prometheus-pve-exporter
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=prometheus
+ExecStart=/opt/pve-exporter/bin/pve_exporter --config.file /etc/prometheus/pve.yml --web.listen-address 127.0.0.1:9221
+Restart=on-failure
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

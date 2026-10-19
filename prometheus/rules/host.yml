@@ -1,0 +1,46 @@
+groups:
+  - name: host
+    rules:
+      - alert: DiskAlmostFull
+        expr: (node_filesystem_avail_bytes{fstype=~"ext4|xfs|zfs|vfat"} / node_filesystem_size_bytes) < 0.10
+        for: 10m
+        labels: { severity: warning }
+        annotations: { summary: "{{ $labels.instance }}: {{ $labels.mountpoint }} has {{ $value | humanizePercentage }} free" }
+
+      - alert: DiskFull
+        expr: (node_filesystem_avail_bytes{fstype=~"ext4|xfs|zfs|vfat"} / node_filesystem_size_bytes) < 0.05
+        for: 5m
+        labels: { severity: critical }
+        annotations: { summary: "{{ $labels.instance }}: {{ $labels.mountpoint }} has {{ $value | humanizePercentage }} free" }
+
+      - alert: MemoryLow
+        expr: node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes < 0.10
+        for: 10m
+        labels: { severity: warning }
+        annotations: { summary: "{{ $labels.instance }}: available RAM at {{ $value | humanizePercentage }}" }
+
+      # Swap that is merely *used* (cold pages, e.g. after a backup) is harmless.
+      # The problem is reading pages back in: that is real memory pressure.
+      - alert: SwapThrashing
+        expr: rate(node_vmstat_pswpin[5m]) * 4096 / 1e6 > 1
+        for: 15m
+        labels: { severity: warning }
+        annotations: { summary: "{{ $labels.instance }}: swapping in at {{ printf \"%.1f\" $value }} MB/s for 15 min" }
+
+      - alert: OomKill
+        expr: increase(node_vmstat_oom_kill[15m]) > 0
+        labels: { severity: warning }
+        annotations:
+          summary: "{{ $labels.instance }}: the kernel OOM-killed a process in the last 15 min"
+          description: "journalctl -k | grep -i oom (oom_memcg names the VM/container)."
+
+      - alert: SystemdUnitFailed
+        expr: node_systemd_unit_state{state="failed"} == 1
+        for: 5m
+        labels: { severity: warning }
+        annotations: { summary: "{{ $labels.instance }}: unit {{ $labels.name }} failed" }
+
+      - alert: HostRebooted
+        expr: time() - node_boot_time_seconds < 600
+        labels: { severity: warning }
+        annotations: { summary: "{{ $labels.instance }} rebooted {{ $value | humanizeDuration }} ago" }

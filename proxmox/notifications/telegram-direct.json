@@ -1,0 +1,1 @@
+{"chat_id": "{{ secrets.chat_id }}", "text": "{{#if (eq severity "error")}}🔴{{else}}{{#if (eq severity "warning")}}🟠{{else}}{{#if (eq severity "notice")}}🔵{{else}}🟢{{/if}}{{/if}}{{/if}} {{ escape title }}\n\n{{ escape message }}", "disable_web_page_preview": true, "disable_notification": {{#if (eq severity "info")}}true{{else}}false{{/if}}}

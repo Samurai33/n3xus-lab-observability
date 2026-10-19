@@ -1,0 +1,25 @@
+[Unit]
+Description=MKTXP - MikroTik Prometheus exporter (API-SSL, read-only user)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=prometheus
+Group=prometheus
+WorkingDirectory=/etc/mktxp/conf
+ExecStart=/opt/mktxp/bin/mktxp --cfg-dir /etc/mktxp/conf export
+Restart=on-failure
+RestartSec=15
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/etc/mktxp/conf
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+MemoryMax=300M
+
+[Install]
+WantedBy=multi-user.target

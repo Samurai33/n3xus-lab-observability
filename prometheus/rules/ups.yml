@@ -1,0 +1,48 @@
+# UPS through NUT -> collectors/nut/nut-textfile.sh -> node_exporter textfile.
+# energy="yes" routes to chat only: NUT/upsmon usually already sends its own e-mail, no need to duplicate.
+groups:
+  - name: ups
+    rules:
+      - alert: UpsOnBattery
+        expr: nut_on_battery == 1
+        labels: { severity: critical, energy: "yes" }
+        annotations: { summary: "{{ $labels.instance }}: UPS on BATTERY (graceful shutdown starts per upssched)" }
+
+      - alert: UpsLowBattery
+        expr: nut_low_battery == 1
+        labels: { severity: critical, energy: "yes" }
+        annotations: { summary: "{{ $labels.instance }}: UPS reports LOW BATTERY (LB)" }
+
+      - alert: UpsNoReading
+        expr: nut_scrape_ok == 0
+        for: 2m
+        labels: { severity: warning }
+        annotations: { summary: "{{ $labels.instance }}: upsc returned nothing for 2 min (driver or USB)" }
+
+      - alert: UpsHighLoad
+        expr: nut_ups_load > 80
+        for: 5m
+        labels: { severity: warning }
+        annotations: { summary: "{{ $labels.instance }}: UPS load at {{ $value }}%" }
+
+      # Internal UPS sensor (not the battery itself). After any battery use the charger runs hard and the
+      # sensor stays warm for hours, so thresholds differ at rest and while recharging.
+      # "Recharging" = used battery in the last 12 h or charge < 100%.
+      # References: APC alarms battery > 50 °C; typical 12 V VRLA datasheets charge at <= 40 °C.
+      - alert: UpsTemperature
+        expr: nut_ups_temperature > 40 unless on(instance) ((max_over_time(nut_on_battery[12h]) == 1) or on(instance) (nut_battery_charge < 100))
+        for: 10m
+        labels: { severity: warning }
+        annotations: { summary: "{{ $labels.instance }}: UPS at {{ $value }} °C while idle" }
+
+      - alert: UpsTemperatureRecharging
+        expr: nut_ups_temperature > 50 and on(instance) ((max_over_time(nut_on_battery[12h]) == 1) or on(instance) (nut_battery_charge < 100))
+        for: 10m
+        labels: { severity: warning }
+        annotations: { summary: "{{ $labels.instance }}: UPS at {{ $value }} °C while recharging; check battery case temperature (> 40 °C = replace)" }
+
+      - alert: UpsTemperatureCritical
+        expr: (nut_ups_temperature > 50 unless on(instance) ((max_over_time(nut_on_battery[12h]) == 1) or on(instance) (nut_battery_charge < 100))) or nut_ups_temperature > 60
+        for: 5m
+        labels: { severity: critical }
+        annotations: { summary: "{{ $labels.instance }}: UPS temperature CRITICAL at {{ $value }} °C" }

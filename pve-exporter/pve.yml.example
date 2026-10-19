@@ -1,0 +1,12 @@
+# Copy to secrets/pve.yml (chmod 600). Use an API token of a user with the PVEAuditor role on / (read-only):
+#   pveum user add monitor@pve
+#   pveum acl modify / --users monitor@pve --roles PVEAuditor
+#   pveum user token add monitor@pve prometheus --privsep 1
+#   pveum acl modify / --tokens 'monitor@pve!prometheus' --roles PVEAuditor
+default:
+  user: monitor@pve
+  token_name: prometheus
+  token_value: 00000000-0000-0000-0000-000000000000
+  # Keep true. Set false only if Python rejects the PVE self-signed CA (Python 3.13 enables X509_STRICT and
+  # the default PVE CA lacks keyUsage); better to install a proper certificate on the node.
+  verify_ssl: true

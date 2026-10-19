@@ -1,0 +1,82 @@
+# Proxmox VE: prometheus-pve-exporter, vzdump textfile (collectors/vzdump) and LVM-thin.
+groups:
+  - name: proxmox
+    rules:
+      - alert: GuestStopped
+        expr: (pve_up{id=~"(qemu|lxc)/.+"} == 0) * on(id) group_left(name) pve_guest_info and on(id) pve_onboot_status == 1
+        for: 3m
+        labels: { severity: critical }
+        annotations: { summary: "{{ $labels.id }} ({{ $labels.name }}) is stopped but has onboot=1" }
+
+      - alert: StorageAlmostFull
+        expr: pve_disk_usage_bytes{id=~"storage/.+"} / pve_disk_size_bytes > 0.85
+        for: 15m
+        labels: { severity: warning }
+        annotations: { summary: "Storage {{ $labels.id }} at {{ $value | humanizePercentage }}" }
+
+      - alert: StorageFull
+        expr: pve_disk_usage_bytes{id=~"storage/.+"} / pve_disk_size_bytes > 0.95
+        for: 5m
+        labels: { severity: critical }
+        annotations: { summary: "Storage {{ $labels.id }} at {{ $value | humanizePercentage }}" }
+
+      - alert: StorageUnavailable
+        expr: pve_up{id=~"storage/.+"} == 0
+        for: 5m
+        labels: { severity: critical }
+        annotations: { summary: "Storage {{ $labels.id }} unavailable in PVE" }
+
+      - alert: GuestNotInAnyBackupJob
+        expr: pve_not_backed_up_info * on(id) group_left(name) pve_guest_info == 1
+        for: 1h
+        labels: { severity: warning }
+        annotations: { summary: "{{ $labels.id }} ({{ $labels.name }}) is not in any backup job" }
+
+  # pve-exporter only knows whether a guest is *in* a job, not whether the last backup worked.
+  - name: backups
+    rules:
+      - alert: BackupFailed
+        expr: n3x_backup_ok == 0
+        for: 5m
+        labels: { severity: critical }
+        annotations:
+          summary: "{{ $labels.instance }}: last backup of guest {{ $labels.vmid }} FAILED"
+          description: "See /var/log/vzdump/{{ $labels.type }}-{{ $labels.vmid }}.log on the host."
+
+      - alert: BackupWithErrors
+        expr: n3x_backup_warnings > 0 and n3x_backup_ok == 1
+        for: 5m
+        labels: { severity: warning }
+        annotations:
+          summary: "{{ $labels.instance }}: backup of guest {{ $labels.vmid }} finished with {{ $value }} non-fatal ERROR line(s)"
+          description: "Task OK but e.g. qemu-guest-agent fsfreeze/thaw timed out."
+
+      - alert: BackupOverdue
+        expr: (time() - n3x_backup_end_timestamp_seconds) > 26 * 3600
+        for: 30m
+        labels: { severity: warning }
+        annotations: { summary: "{{ $labels.instance }}: guest {{ $labels.vmid }} has no backup for {{ $value | humanizeDuration }}" }
+
+  # A full thin pool means I/O errors in every guest on it.
+  # lvm_thin_* comes from a small textfile collector (lvs -o data_percent,metadata_percent).
+  - name: lvm-thin
+    rules:
+      - alert: ThinPoolDataHigh
+        expr: lvm_thin_data_percent > 80
+        for: 15m
+        labels: { severity: warning }
+        annotations: { summary: "{{ $labels.instance }}: thin pool {{ $labels.vg }}/{{ $labels.pool }} at {{ $value | printf \"%.0f\" }}%" }
+
+      - alert: ThinPoolDataCritical
+        expr: lvm_thin_data_percent > 90
+        for: 5m
+        labels: { severity: critical }
+        annotations: { summary: "{{ $labels.instance }}: thin pool {{ $labels.vg }}/{{ $labels.pool }} CRITICAL at {{ $value | printf \"%.0f\" }}%" }
+
+      - alert: ThinPoolMetadataHigh
+        expr: lvm_thin_metadata_percent > 80
+        for: 15m
+        labels: { severity: critical }
+        annotations:
+          summary: "{{ $labels.instance }}: thin pool {{ $labels.vg }}/{{ $labels.pool }} metadata at {{ $value | printf \"%.0f\" }}%"
+          description: "Full metadata corrupts the pool. Check lvs -a; consider lvextend --poolmetadatasize."

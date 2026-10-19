@@ -1,0 +1,35 @@
+# Pipeline health. Severity: critical | warning (critical also goes to e-mail, see alertmanager.yml).
+groups:
+  - name: meta
+    rules:
+      # Dead man's switch: always firing. Alertmanager sends it to an external heartbeat endpoint
+      # (healthchecks.io, a Cloudflare Worker, ...) that alerts you when the heartbeats stop.
+      - alert: Watchdog
+        expr: vector(1)
+        labels: { severity: none }
+        annotations: { summary: "Alerting pipeline is alive (dead man's switch)" }
+
+      - alert: TargetDown
+        expr: up == 0
+        for: 2m
+        labels: { severity: critical }
+        annotations: { summary: "Scrape {{ $labels.job }} ({{ $labels.instance }}) down for 2 min" }
+
+      - alert: TextfileStale
+        expr: time() - node_textfile_mtime_seconds{file=~".*/(nut|ipmitool_sensor|lvm_thin|n3x_docker|n3x_fail2ban)\\.prom"} > 300
+        for: 5m
+        labels: { severity: warning }
+        annotations: { summary: "{{ $labels.instance }}: textfile {{ $labels.file }} not updated for {{ $value | humanizeDuration }}" }
+
+      - alert: TextfileStaleSlow
+        # collectors that run every 5-15 min
+        expr: time() - node_textfile_mtime_seconds{file=~".*/(vzdump|nvme|zfs_zpool)\\.prom"} > 1800
+        for: 5m
+        labels: { severity: warning }
+        annotations: { summary: "{{ $labels.instance }}: collector {{ $labels.file }} stopped {{ $value | humanizeDuration }} ago" }
+
+      - alert: IpmiCollectorFailing
+        expr: ipmi_up == 0
+        for: 10m
+        labels: { severity: warning }
+        annotations: { summary: "IPMI collector {{ $labels.collector }} failing for 10 min (often /dev/ipmi0 is root-only)" }

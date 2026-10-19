@@ -1,0 +1,99 @@
+# critical -> Telegram + e-mail; warning -> Telegram; energy="yes" -> Telegram only (NUT already e-mails);
+# Proxmox notifications (webhook into /api/v2/alerts) -> one Telegram message per event, never repeated.
+# Secrets live in files under ./secrets (mounted at /etc/alertmanager/secrets), never in this file.
+global:
+  resolve_timeout: 5m
+  smtp_smarthost: 'smtp.example.com:465'      # 465 = implicit TLS
+  smtp_from: 'Lab monitor <alerts@example.com>'
+  smtp_auth_username: 'alerts@example.com'
+  smtp_auth_password_file: '/etc/alertmanager/secrets/smtp_password'
+  smtp_require_tls: false                     # must be false for port 465 (TLS is implicit)
+
+templates: [ '/etc/alertmanager/templates/*.tmpl' ]
+
+route:
+  receiver: telegram
+  group_by: [ alertname, instance ]
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 4h
+  routes:
+    # Proxmox posts each notification as an alert (see proxmox/notifications). One message per event,
+    # no repeats and no "resolved": the alert just expires after resolve_timeout. "info" is sent silently.
+    - matchers: [ 'alertname="Proxmox"' ]
+      group_by: [ '...' ]
+      group_wait: 0s
+      repeat_interval: 100h
+      receiver: proxmox
+      routes:
+        - matchers: [ 'pve_severity="info"' ]
+          receiver: proxmox-silent
+    - matchers: [ 'alertname="Watchdog"' ]
+      receiver: heartbeat
+      group_wait: 0s
+      group_interval: 1m
+      repeat_interval: 10m
+    - matchers: [ 'energy="yes"' ]
+      receiver: telegram
+      group_wait: 0s
+      repeat_interval: 15m
+    - matchers: [ 'severity="critical"' ]
+      receiver: telegram-email
+
+inhibit_rules:
+  # A host that is down explains everything else on it.
+  - source_matchers: [ 'alertname="TargetDown"', 'job=~"node|vms"' ]
+    target_matchers: [ 'alertname!="TargetDown"' ]
+    equal: [ instance ]
+  - source_matchers: [ 'alertname="DiskFull"' ]
+    target_matchers: [ 'alertname="DiskAlmostFull"' ]
+    equal: [ instance, mountpoint ]
+  - source_matchers: [ 'alertname="StorageFull"' ]
+    target_matchers: [ 'alertname="StorageAlmostFull"' ]
+    equal: [ id ]
+  - source_matchers: [ 'alertname="UpsLowBattery"' ]
+    target_matchers: [ 'alertname="UpsOnBattery"' ]
+  - source_matchers: [ 'alertname="InternetNoPing"' ]
+    target_matchers: [ 'alertname=~"SiteDown|InternetPacketLoss|InternetHighLatency"' ]
+
+receivers:
+  # Dead man's switch: an external endpoint that alerts you when these POSTs stop (e.g. 25 min of silence).
+  - name: heartbeat
+    webhook_configs:
+      - url: 'https://heartbeat.example.com/ping/lab-monitor'
+        send_resolved: false
+        http_config: { authorization: { type: Bearer, credentials_file: '/etc/alertmanager/secrets/heartbeat_token' } }
+
+  - name: telegram
+    telegram_configs: &tg
+      - bot_token_file: '/etc/alertmanager/secrets/telegram_bot_token'
+        chat_id: -1000000000000           # your group/channel id (integer; cannot be read from a file)
+        # message_thread_id: 1            # forum topic, if the group uses topics
+        parse_mode: HTML
+        message: '{{ template "lab.telegram" . }}'
+        send_resolved: true
+
+  - name: telegram-email
+    telegram_configs: *tg
+    email_configs:
+      - to: 'oncall@example.com'
+        send_resolved: true
+        headers: { Subject: '{{ template "lab.subject" . }}' }
+        html: '{{ template "lab.email" . }}'
+
+  - name: proxmox
+    telegram_configs: &pve
+      - bot_token_file: '/etc/alertmanager/secrets/telegram_bot_token'
+        chat_id: -1000000000000
+        parse_mode: HTML
+        message: '{{ template "lab.pve" . }}'
+        send_resolved: false
+
+  - name: proxmox-silent
+    telegram_configs:
+      - bot_token_file: '/etc/alertmanager/secrets/telegram_bot_token'
+        chat_id: -1000000000000
+        parse_mode: HTML
+        message: '{{ template "lab.pve" . }}'
+        send_resolved: false
+        disable_notifications: true

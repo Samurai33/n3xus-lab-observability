@@ -1,0 +1,8 @@
+secrets/*
+!secrets/README.md
+mktxp/credentials.yaml
+mktxp/*.pem
+mktxp/*.log
+*.orig*
+*.bak*
+.env

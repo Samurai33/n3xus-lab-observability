@@ -1,0 +1,23 @@
+modules:
+  # One ICMP echo per probe; packet loss = share of failed probes over a window.
+  # Needs CAP_NET_RAW (docker-compose.yml) or, in an unprivileged LXC,
+  # net.ipv4.ping_group_range covering the prometheus group (AmbientCapabilities does not work there).
+  icmp_ip4:
+    prober: icmp
+    timeout: 4s
+    icmp:
+      preferred_ip_protocol: "ip4"
+      ip_protocol_fallback: false
+
+  # A site behind a tunnel/CDN is "up" when the origin answered: 2xx/3xx, or 401/403/404 from APIs and login pages.
+  # 5xx and 530 (tunnel/origin down) = down. Redirects are not followed (SSO login usually lives on another domain).
+  http_published:
+    prober: http
+    timeout: 10s
+    http:
+      preferred_ip_protocol: "ip4"
+      follow_redirects: false
+      valid_status_codes: [200, 201, 202, 204, 301, 302, 303, 307, 308, 401, 403, 404, 405, 429]
+
+  tcp_connect:
+    prober: tcp

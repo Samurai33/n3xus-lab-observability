@@ -1,0 +1,102 @@
+#!/usr/bin/python3
+"""Docker containers + fail2ban jails -> node_exporter textfile collector.
+
+Runs as root from a systemd timer every 60 s. One `docker inspect` per run, so it is cheap for dockerd
+even with 100+ containers (cAdvisor is overkill when all you want is "running / healthy / restarting").
+"""
+import json, os, re, shutil, subprocess, time
+from datetime import datetime
+
+DIR = os.environ.get('TEXTFILE_DIR', '/var/lib/prometheus/node-exporter')
+HEALTH = {'healthy': 0, 'starting': 1, 'unhealthy': 2}
+
+
+def esc(v):
+    return str(v).replace('\\', '\\\\').replace('"', '\\"').replace('\n', ' ')
+
+
+def run(*cmd):
+    return subprocess.run(cmd, capture_output=True, text=True, timeout=40, check=True).stdout
+
+
+def epoch(ts):
+    # Docker uses RFC 3339 with nanoseconds; "0001-01-01..." means never
+    if not ts or ts.startswith('0001'):
+        return 0
+    return datetime.fromisoformat(re.sub(r'(\.\d{6})\d*', r'\1', ts).replace('Z', '+00:00')).timestamp()
+
+
+def inspect():
+    # A container removed between `ps` and `inspect` (e.g. a redeploy swapping it) makes inspect fail and
+    # would raise a false DockerCollectorFailing. List again and retry.
+    for _ in range(3):
+        ids = run('docker', 'ps', '-aq', '--no-trunc').split()
+        if not ids:
+            return []
+        r = subprocess.run(['docker', 'inspect', *ids], capture_output=True, text=True, timeout=40)
+        if r.returncode == 0:
+            return json.loads(r.stdout)
+        if 'No such' not in r.stderr:
+            break
+        time.sleep(2)
+    raise RuntimeError('docker inspect failed: %s' % r.stderr.strip()[:200])
+
+
+def docker():
+    L = ['# HELP n3x_container_running 1 if the container is running', '# TYPE n3x_container_running gauge',
+         '# HELP n3x_container_health_state 0 healthy, 1 starting, 2 unhealthy, -1 no healthcheck',
+         '# TYPE n3x_container_health_state gauge']
+    ok = 1
+    try:
+        for c in inspect():
+            st, hc = c['State'], c['HostConfig']
+            lab = 'name="%s"' % esc(c['Name'].lstrip('/'))
+            health = (st.get('Health') or {}).get('Status')
+            L.append('n3x_container_info{%s,image="%s",restart_policy="%s",state="%s"} 1' % (
+                lab, esc(c['Config']['Image']), esc(hc['RestartPolicy']['Name']), esc(st['Status'])))
+            L.append('n3x_container_running{%s} %d' % (lab, st['Running']))
+            L.append('n3x_container_restart_count{%s} %d' % (lab, c['RestartCount']))
+            L.append('n3x_container_health_state{%s} %d' % (lab, HEALTH.get(health, -1)))
+            L.append('n3x_container_started_seconds{%s} %d' % (lab, epoch(st['StartedAt'])))
+            L.append('n3x_container_exit_code{%s} %d' % (lab, st['ExitCode']))
+    except Exception:
+        ok = 0
+    L.append('n3x_docker_scrape_ok %d' % ok)
+    return L
+
+
+def fail2ban():
+    if not shutil.which('fail2ban-client'):
+        return []
+    L, ok = [], 1
+    try:
+        jails = re.search(r'Jail list:\s*(.*)', run('fail2ban-client', 'status')).group(1)
+        for j in [x.strip() for x in jails.split(',') if x.strip()]:
+            s = run('fail2ban-client', 'status', j)
+            for key, name in (('Currently failed', 'currently_failed'), ('Total failed', 'failed_total'),
+                              ('Currently banned', 'currently_banned'), ('Total banned', 'banned_total')):
+                m = re.search(key + r':\s*(\d+)', s)
+                if m:
+                    L.append('n3x_fail2ban_%s{jail="%s"} %s' % (name, esc(j), m.group(1)))
+    except Exception:
+        ok = 0
+    L.append('n3x_fail2ban_scrape_ok %d' % ok)
+    return L
+
+
+def write(name, lines):
+    target = os.path.join(DIR, name)
+    tmp = '%s.%d' % (target, os.getpid())
+    with open(tmp, 'w') as f:
+        f.write('\n'.join(lines) + '\n')
+    os.chmod(tmp, 0o644)
+    os.replace(tmp, target)
+
+
+if __name__ == '__main__':
+    os.makedirs(DIR, exist_ok=True)
+    if shutil.which('docker'):
+        write('n3x_docker.prom', docker())
+    f = fail2ban()
+    if f:
+        write('n3x_fail2ban.prom', f)

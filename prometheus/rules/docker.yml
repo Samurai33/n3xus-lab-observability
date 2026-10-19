@@ -1,0 +1,32 @@
+# Docker hosts (VMs): collectors/docker/n3x-docker-textfile -> node_exporter textfile, job "vms".
+groups:
+  - name: docker
+    rules:
+      - alert: ContainerUnhealthy
+        expr: n3x_container_health_state == 2 and on(instance, name) n3x_container_running == 1
+        for: 5m
+        labels: { severity: warning }
+        annotations: { summary: "{{ $labels.instance }}: container {{ $labels.name }} unhealthy for 5 min" }
+
+      - alert: ContainerRestartLoop
+        expr: increase(n3x_container_restart_count[15m]) >= 3
+        labels: { severity: warning }
+        annotations: { summary: "{{ $labels.instance }}: container {{ $labels.name }} restarted {{ $value | humanize }}x in 15 min" }
+
+      - alert: DockerCollectorFailing
+        expr: n3x_docker_scrape_ok == 0
+        for: 5m
+        labels: { severity: warning }
+        annotations: { summary: "{{ $labels.instance }}: Docker collector failing (dockerd stuck?)" }
+
+      - alert: Fail2banNoReading
+        expr: n3x_fail2ban_scrape_ok == 0
+        for: 5m
+        labels: { severity: warning }
+        annotations: { summary: "{{ $labels.instance }}: fail2ban-client not answering" }
+
+      - alert: VmMemoryLow
+        expr: node_memory_MemAvailable_bytes{job="vms"} / node_memory_MemTotal_bytes{job="vms"} < 0.10
+        for: 10m
+        labels: { severity: critical }
+        annotations: { summary: "{{ $labels.instance }}: available RAM at {{ $value | humanizePercentage }}" }

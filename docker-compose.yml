@@ -1,0 +1,59 @@
+# Quickstart: prometheus + alertmanager + blackbox + MKTXP + pve-exporter on one Docker host.
+# Images are pinned; review and bump by hand (no Dependabot).
+# Everything listens on 127.0.0.1 only. Put a reverse proxy with auth (or a Tailscale/WireGuard address)
+# in front if you need remote access. Proxmox must reach Alertmanager to deliver its webhook.
+name: lab-observability
+
+services:
+  prometheus:
+    image: prom/prometheus:v3.13.4
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=30d
+      - --query.timeout=20s
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./prometheus/rules:/etc/prometheus/rules:ro
+      - prometheus-data:/prometheus
+    ports: [ "127.0.0.1:9090:9090" ]
+    restart: unless-stopped
+
+  alertmanager:
+    image: prom/alertmanager:v0.34.1
+    command:
+      - --config.file=/etc/alertmanager/alertmanager.yml
+      - --storage.path=/alertmanager
+      - --cluster.listen-address=
+    volumes:
+      - ./alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      - ./alertmanager/templates:/etc/alertmanager/templates:ro
+      - ./secrets:/etc/alertmanager/secrets:ro
+      - alertmanager-data:/alertmanager
+    ports: [ "127.0.0.1:9093:9093" ]
+    restart: unless-stopped
+
+  blackbox:
+    image: prom/blackbox-exporter:v0.28.0
+    command: [ --config.file=/etc/blackbox/blackbox.yml ]
+    volumes: [ "./blackbox/blackbox.yml:/etc/blackbox/blackbox.yml:ro" ]
+    # unprivileged ICMP sockets for every group, so ping works as the image's non-root user
+    sysctls: { net.ipv4.ping_group_range: "0 2147483647" }
+    restart: unless-stopped
+
+  mktxp:
+    image: ghcr.io/akpw/mktxp:2.0.3
+    volumes:
+      - ./mktxp:/home/mktxp/mktxp
+      - ./secrets/mktxp_credentials.yaml:/home/mktxp/mktxp/credentials.yaml:ro
+      - ./secrets/router-ca.pem:/home/mktxp/mktxp/router-ca.pem:ro
+    restart: unless-stopped
+
+  pve-exporter:
+    image: prompve/prometheus-pve-exporter:3.10.0
+    volumes: [ "./secrets/pve.yml:/etc/prometheus/pve.yml:ro" ]
+    restart: unless-stopped
+
+volumes:
+  prometheus-data:
+  alertmanager-data:

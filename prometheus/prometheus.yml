@@ -1,0 +1,80 @@
+# Prometheus for a small Proxmox homelab.
+# Replace every *.lab.example name with your own hosts (or IPs). Nothing here needs to be reachable from the internet.
+global:
+  scrape_interval: 30s
+  evaluation_interval: 30s
+  external_labels: { site: homelab }
+
+alerting:
+  alertmanagers:
+    - static_configs: [ { targets: [ "alertmanager:9093" ] } ]
+
+rule_files: [ "/etc/prometheus/rules/*.yml" ]
+
+scrape_configs:
+  - job_name: prometheus
+    static_configs: [ { targets: [ "localhost:9090" ] } ]
+
+  # Proxmox hosts: node_exporter with the textfile collector (UPS, vzdump, Docker, fail2ban land here).
+  - job_name: node
+    scrape_interval: 15s
+    static_configs:
+      - { targets: [ "pve-01.lab.example:9100" ], labels: { instance: pve-01 } }
+      - { targets: [ "pve-02.lab.example:9100" ], labels: { instance: pve-02 } }
+
+  # Out-of-band management (iDRAC/iLO/IPMI) via ipmi_exporter on the host.
+  - job_name: ipmi
+    scrape_interval: 60s
+    scrape_timeout: 30s
+    static_configs: [ { targets: [ "pve-01.lab.example:9290" ], labels: { instance: pve-01 } } ]
+
+  # Guests (VMs) running node_exporter + the Docker/fail2ban textfile collector.
+  - job_name: vms
+    static_configs:
+      - { targets: [ "docker-01.lab.example:9100" ], labels: { instance: docker-01, vmid: "101", node: pve-01 } }
+
+  # Proxmox API through prometheus-pve-exporter (read-only PVEAuditor token).
+  - job_name: pve
+    scrape_timeout: 20s
+    metrics_path: /pve
+    params: { module: [ default ], cluster: [ "1" ], node: [ "1" ] }
+    static_configs: [ { targets: [ "pve-01.lab.example" ] } ]
+    relabel_configs:
+      - { source_labels: [ __address__ ], target_label: __param_target }
+      - { target_label: instance, replacement: pve-01 }
+      - { target_label: __address__, replacement: "pve-exporter:9221" }
+
+  # Public sites. "Up" means the origin answered, so 401/403/404 count as up (see blackbox.yml).
+  - job_name: sites
+    metrics_path: /probe
+    params: { module: [ http_published ] }
+    static_configs:
+      - targets: [ "https://example.com", "https://status.example.com" ]
+        labels: { group: main, severity_hint: critical }
+    relabel_configs:
+      - { source_labels: [ __address__ ], target_label: __param_target }
+      - { source_labels: [ __param_target ], target_label: instance }
+      - { target_label: __address__, replacement: "blackbox:9115" }
+
+  # MikroTik through MKTXP (API-SSL, read-only user). See mktxp/README.md.
+  - job_name: mikrotik
+    scrape_interval: 30s
+    scrape_timeout: 25s
+    static_configs: [ { targets: [ "mktxp:49090" ], labels: { instance: router } } ]
+
+  # ICMP probes to tell "the ISP is down" apart from "my server/tunnel is down".
+  # role=modem: the ISP gateway (first hop). role=external: public anycast resolvers.
+  # role=hop: an ISP router, graph only (carrier routers often deprioritise ICMP).
+  - job_name: internet
+    scrape_interval: 15s
+    metrics_path: /probe
+    params: { module: [ icmp_ip4 ] }
+    static_configs:
+      - { targets: [ "192.0.2.1" ],    labels: { target: isp-modem, role: modem } }
+      - { targets: [ "1.1.1.1" ],      labels: { target: cloudflare-dns, role: external } }
+      - { targets: [ "8.8.8.8" ],      labels: { target: google-dns, role: external } }
+      - { targets: [ "198.51.100.1" ], labels: { target: isp-hop, role: hop } }
+    relabel_configs:
+      - { source_labels: [ __address__ ], target_label: __param_target }
+      - { source_labels: [ __param_target ], target_label: instance }
+      - { target_label: __address__, replacement: "blackbox:9115" }

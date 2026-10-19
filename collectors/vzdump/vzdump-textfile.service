@@ -1,0 +1,7 @@
+[Unit]
+Description=Result of the last vzdump backup per guest, for the node_exporter textfile collector
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/vzdump-textfile
+Nice=10

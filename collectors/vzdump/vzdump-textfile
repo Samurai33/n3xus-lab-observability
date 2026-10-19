@@ -1,0 +1,65 @@
+#!/usr/bin/env python3
+"""Result of the last vzdump backup of every guest on THIS Proxmox node -> node_exporter textfile collector.
+
+prometheus-pve-exporter only says whether a guest is *in* a backup job (pve_not_backed_up_info), not whether
+the last backup worked. Source: /var/log/vzdump/{qemu,lxc}-<vmid>.log, the log of the latest backup of each
+guest (same approach as the community Checkmk plugin). Only guests that still exist on this node are reported.
+"""
+import os, re, socket, time
+
+LOGS = '/var/log/vzdump'
+NODE = socket.gethostname()
+OUT = os.environ.get('OUT', '/var/lib/prometheus/node-exporter/vzdump.prom')
+
+exists = set()
+for kind, d in (('qemu', 'qemu-server'), ('lxc', 'lxc')):
+    p = f'/etc/pve/nodes/{NODE}/{d}'
+    if os.path.isdir(p):
+        exists |= {(kind, f[:-5]) for f in os.listdir(p) if f.endswith('.conf')}
+
+lines = [
+    '# HELP n3x_backup_end_timestamp_seconds End of the last vzdump backup of the guest (log mtime).',
+    '# TYPE n3x_backup_end_timestamp_seconds gauge',
+    '# HELP n3x_backup_ok 1 if the last backup finished, 0 if it failed.',
+    '# TYPE n3x_backup_ok gauge',
+    '# HELP n3x_backup_warnings Non-fatal ERROR lines in the last finished backup (e.g. qga fsfreeze-thaw timeout).',
+    '# TYPE n3x_backup_warnings gauge',
+    '# HELP n3x_backup_running 1 while a backup of the guest is running (log with no end and no ERROR).',
+    '# TYPE n3x_backup_running gauge',
+    '# HELP n3x_backup_start_timestamp_seconds Start of the running backup.',
+    '# TYPE n3x_backup_start_timestamp_seconds gauge',
+    '# HELP n3x_backup_duration_seconds Duration of the last backup.',
+    '# TYPE n3x_backup_duration_seconds gauge',
+]
+for f in sorted(os.listdir(LOGS)) if os.path.isdir(LOGS) else []:
+    m = re.fullmatch(r'(qemu|lxc)-(\d+)\.log', f)
+    if not m or (m[1], m[2]) not in exists:
+        continue
+    path = os.path.join(LOGS, f)
+    with open(path, errors='replace') as h:
+        text = h.read()
+    end = re.search(r'Finished Backup of VM \d+ \((\d+):(\d+):(\d+)\)', text)
+    errors = text.count('ERROR:')
+    failed = re.search(r'ERROR: Backup of VM \d+ failed', text)
+    lab = f'vmid="{m[2]}",type="{m[1]}"'
+    running = not end and not errors
+    lines.append(f'n3x_backup_running{{{lab}}} {int(running)}')
+    if running:
+        # vzdump overwrites the previous log: there is no result yet, only the start time
+        start = re.match(r'(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d)', text)
+        t0 = time.mktime(time.strptime(start[1], '%Y-%m-%d %H:%M:%S')) if start else os.path.getmtime(path)
+        lines.append(f'n3x_backup_start_timestamp_seconds{{{lab}}} {t0:.0f}')
+        continue
+    # Same criterion as the PVE task: a non-fatal ERROR (e.g. qga thaw) does not prevent "Finished Backup".
+    ok = 1 if end and not failed else 0
+    lines.append(f'n3x_backup_end_timestamp_seconds{{{lab}}} {os.path.getmtime(path):.0f}')
+    lines.append(f'n3x_backup_ok{{{lab}}} {ok}')
+    if end:
+        lines.append(f'n3x_backup_warnings{{{lab}}} {errors}')
+        lines.append(f'n3x_backup_duration_seconds{{{lab}}} {int(end[1]) * 3600 + int(end[2]) * 60 + int(end[3])}')
+
+tmp = OUT + '.tmp'
+with open(tmp, 'w') as h:
+    h.write('\n'.join(lines) + '\n')
+os.chmod(tmp, 0o644)
+os.replace(tmp, OUT)

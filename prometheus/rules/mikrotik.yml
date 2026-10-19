@@ -1,0 +1,98 @@
+# MikroTik via MKTXP. Interface names are RouterOS defaults; adjust the regexes to your port plan:
+#   ether1        = WAN
+#   sfp-sfpplus1  = 10G uplink to the main server, ether3 = second server
+#   ether7/ether8 = BMC (iDRAC/iLO) and PoE switch
+# Baseline on an RB5009 with ~28 h uptime: physical ports 0 errors/0 drops; WireGuard interfaces show a few
+# errors/min when peers have no endpoint, so only ether*/sfp* are alerted.
+# Temperature: MikroTik forum treats 50-60 °C as normal for an RB5009 and 80 °C as worrying.
+groups:
+  - name: mikrotik
+    rules:
+      - alert: MikrotikNoScrape
+        expr: up{job="mikrotik"} == 0
+        for: 3m
+        labels: { severity: warning }
+        annotations: { summary: "No data from the router (MKTXP/API-SSL) for 3 min" }
+
+      - alert: MikrotikRebooted
+        expr: mktxp_system_uptime < 900
+        labels: { severity: warning }
+        annotations: { summary: "Router rebooted {{ $value | humanizeDuration }} ago" }
+
+      - alert: MikrotikWanDown
+        expr: mktxp_interface_running{name="ether1"} == 0
+        for: 1m
+        labels: { severity: critical }
+        annotations: { summary: "WAN (ether1) has no link" }
+
+      - alert: MikrotikServerLinkDown
+        expr: mktxp_interface_running{name=~"sfp-sfpplus1|ether3"} == 0
+        for: 1m
+        labels: { severity: critical }
+        annotations: { summary: "Server link down on the router: {{ $labels.name }}" }
+
+      - alert: MikrotikPortDown
+        expr: mktxp_interface_running{name=~"ether7|ether8"} == 0
+        for: 2m
+        labels: { severity: warning }
+        annotations: { summary: "Port {{ $labels.name }} has no link" }
+
+      - alert: MikrotikLinkFlapping
+        expr: increase(mktxp_link_downs_total{name=~"ether.*|sfp.*"}[30m]) >= 3
+        labels: { severity: warning }
+        annotations: { summary: "Port {{ $labels.name }} went down {{ $value | printf \"%.0f\" }} times in 30 min (cable/port)" }
+
+      - alert: MikrotikSlowNegotiation
+        expr: (mktxp_interface_rate{name="sfp-sfpplus1"} < 10000 or mktxp_interface_rate{name=~"ether1|ether3|ether8"} < 1000 or mktxp_interface_full_duplex{name=~"ether1|ether3|ether8|sfp-sfpplus1"} == 0) and on(name) mktxp_interface_running == 1
+        for: 5m
+        labels: { severity: warning }
+        annotations: { summary: "Port {{ $labels.name }} negotiated below normal speed/duplex" }
+
+      - alert: MikrotikInterfaceErrors
+        expr: 60 * sum by(name) (rate(mktxp_interface_rx_error_total{name=~"ether.*|sfp.*"}[5m]) + rate(mktxp_interface_tx_error_total{name=~"ether.*|sfp.*"}[5m])) > 1
+        for: 10m
+        labels: { severity: warning }
+        annotations: { summary: "Errors on {{ $labels.name }}: {{ $value | printf \"%.1f\" }}/min (cable, SFP or port)" }
+
+      - alert: MikrotikInterfaceDrops
+        expr: 60 * sum by(name) (rate(mktxp_interface_rx_drop_total{name=~"ether.*|sfp.*"}[5m]) + rate(mktxp_interface_tx_drop_total{name=~"ether.*|sfp.*"}[5m])) > 10
+        for: 10m
+        labels: { severity: warning }
+        annotations: { summary: "Drops on {{ $labels.name }}: {{ $value | printf \"%.0f\" }}/min (congestion?)" }
+
+      - alert: MikrotikCpuHigh
+        expr: mktxp_system_cpu_load > 80
+        for: 10m
+        labels: { severity: warning }
+        annotations: { summary: "Router CPU at {{ $value }}%" }
+
+      - alert: MikrotikTemperature
+        expr: mktxp_system_cpu_temperature > 70
+        for: 10m
+        labels: { severity: warning }
+        annotations: { summary: "Router at {{ $value }} °C" }
+
+      - alert: MikrotikTemperatureCritical
+        expr: mktxp_system_cpu_temperature > 80
+        for: 5m
+        labels: { severity: critical }
+        annotations: { summary: "Router at {{ $value }} °C: CRITICAL" }
+
+      - alert: MikrotikMemoryLow
+        expr: mktxp_system_free_memory / mktxp_system_total_memory < 0.15
+        for: 10m
+        labels: { severity: warning }
+        annotations: { summary: "Router free memory below 15%" }
+
+      # mktxp_firewall_filter_total counts BYTES. The "name" label is "| chain | action | comment | proto",
+      # so match the comment of your final input-chain drop rule on the WAN.
+      - alert: MikrotikWanDropSpike
+        expr: 'rate(mktxp_firewall_filter_total{name=~".*WAN-DROP.*"}[5m]) > 20000'
+        for: 10m
+        labels: { severity: warning }
+        annotations: { summary: "Dropped WAN traffic far above baseline ({{ $value | humanize }}B/s)" }
+
+      - alert: MikrotikCertificateExpiring
+        expr: mktxp_certificate_expiration_timestamp_seconds - time() < 30 * 86400
+        labels: { severity: warning }
+        annotations: { summary: "Router certificate {{ $labels.name }} expires in less than 30 days" }

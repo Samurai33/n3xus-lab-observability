@@ -1,0 +1,6 @@
+[Unit]
+Description=LVM thin pool usage for the node_exporter textfile collector
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/lvm-thin-textfile
